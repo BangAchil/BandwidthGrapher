@@ -26,6 +26,8 @@ const graph = new BandwidthGrapherEngine(container, {
 let timer: number | null = null;
 let realStream: EventSource | null = null;
 let realStreamTimeout: number | null = null;
+let realStreamFlushTimer: number | null = null;
+let pendingRealPoint: BandwidthPoint | null = null;
 let thresholdsEnabled = false;
 
 loadDbLive();
@@ -109,6 +111,7 @@ function startRomonLive(): void {
 
   setStatus("Source: connecting to romon SSE...");
   realStream = new EventSource(realStreamPath);
+  realStreamFlushTimer = window.setInterval(flushPendingRealPoint, 2_000);
   resetRealStreamTimeout();
 
   realStream.onopen = () => {
@@ -117,15 +120,16 @@ function startRomonLive(): void {
   };
 
   realStream.onmessage = (event) => {
-    resetRealStreamTimeout();
     const point = parseRomonPoint(event.data, realInterfaceName);
     if (!point) {
       setStatus(`Source: romon event ignored (${shorten(event.data)})`);
       console.debug("Ignored romon SSE payload", event.data);
       return;
     }
-    graph.appendPoint(point);
-    setStatus(`Source: romon SSE live (${realInterfaceName}) rx=${formatMbps(point.inboundBps)} tx=${formatMbps(point.outboundBps)}`);
+
+    pendingRealPoint = point;
+    resetRealStreamTimeout();
+    setStatus(`Source: romon SSE buffered (${realInterfaceName}) rx=${formatMbps(point.inboundBps)} tx=${formatMbps(point.outboundBps)}`);
   };
 
   realStream.onerror = () => {
@@ -141,10 +145,17 @@ function stopRealStream(): void {
     realStream = null;
   }
 
+  if (realStreamFlushTimer !== null) {
+    window.clearInterval(realStreamFlushTimer);
+    realStreamFlushTimer = null;
+  }
+
   if (realStreamTimeout !== null) {
     window.clearTimeout(realStreamTimeout);
     realStreamTimeout = null;
   }
+
+  pendingRealPoint = null;
 }
 
 function resetRealStreamTimeout(): void {
@@ -153,6 +164,17 @@ function resetRealStreamTimeout(): void {
     graph.pushTimeout();
     resetRealStreamTimeout();
   }, 10_000);
+}
+
+function flushPendingRealPoint(): void {
+  if (!pendingRealPoint) return;
+
+  graph.appendPoint({
+    ...pendingRealPoint,
+    time: new Date(),
+  });
+  setStatus(`Source: romon SSE live (${realInterfaceName}) rx=${formatMbps(pendingRealPoint.inboundBps)} tx=${formatMbps(pendingRealPoint.outboundBps)}`);
+  pendingRealPoint = null;
 }
 
 function toggleThreshold(): void {
@@ -287,6 +309,8 @@ function findTrafficPayload(payload: unknown, interfaceName?: string): Record<st
 function matchesInterface(record: Record<string, unknown>, interfaceName: string): boolean {
   const candidates = [
     record.targetId,
+    record.targetid,
+    record.target_id,
     record.name,
     record.interface,
     record.interface_name,
@@ -300,7 +324,7 @@ function matchesInterface(record: Record<string, unknown>, interfaceName: string
 }
 
 function hasInterfaceIdentity(record: Record<string, unknown>): boolean {
-  return ["targetId", "name", "interface", "interface_name", "ifName"].some((key) => typeof record[key] === "string");
+  return ["targetId", "targetid", "target_id", "name", "interface", "interface_name", "ifName"].some((key) => typeof record[key] === "string");
 }
 
 function firstNumber(record: Record<string, unknown>, keys: string[]): number | null {
