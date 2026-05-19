@@ -116,6 +116,8 @@ export class BandwidthGrapherEngine {
       this.fitDataRange();
     } else if (dataOptions.range) {
       this.setRange(dataOptions.range.start, dataOptions.range.end);
+    } else if (this.range) {
+      this.range = this.rangeFromTimeRange(this.clampTimeRange(toTime(this.range.start), toTime(this.range.end)));
     } else if (this.followLive) {
       this.range = null;
     }
@@ -145,7 +147,7 @@ export class BandwidthGrapherEngine {
   }
 
   setRange(start: BandwidthRange["start"], end: BandwidthRange["end"]): void {
-    this.range = normalizeRange(start, end);
+    this.range = this.rangeFromTimeRange(this.clampTimeRange(toTime(start), toTime(end)));
     this.followLive = false;
     if (this.options.scale.autoScale) this.updateAutoScale();
     this.render();
@@ -402,21 +404,25 @@ export class BandwidthGrapherEngine {
   }
 
   private drawAreaLinear(points: BandwidthPoint[], seriesKey: SeriesKey, fillColor: string, layout: Layout, visibleRange: TimeRange): void {
-    const { padding, graphWidth, graphHeight } = layout;
+    const { padding, graphHeight } = layout;
     if (points.length === 0) return;
 
     const ctx = this.ctx;
+    const firstX = this.xForTime(points[0].time, layout, visibleRange);
+    let lastX = firstX;
+
     ctx.fillStyle = fillColor;
     ctx.beginPath();
-    ctx.moveTo(padding.left, padding.top + graphHeight);
+    ctx.moveTo(firstX, padding.top + graphHeight);
 
     points.forEach((point) => {
       const x = this.xForTime(point.time, layout, visibleRange);
       const yValue = ((point[seriesKey] ?? 0) / this.currentMaxY) * graphHeight * this.options.areaHeightFactor;
       ctx.lineTo(x, padding.top + graphHeight - yValue);
+      lastX = x;
     });
 
-    ctx.lineTo(padding.left + graphWidth, padding.top + graphHeight);
+    ctx.lineTo(lastX, padding.top + graphHeight);
     ctx.closePath();
     ctx.fill();
   }
@@ -488,13 +494,16 @@ export class BandwidthGrapherEngine {
   }
 
   private drawAreaStep(points: BandwidthPoint[], seriesKey: SeriesKey, fillColor: string, layout: Layout, visibleRange: TimeRange): void {
-    const { padding, graphWidth, graphHeight } = layout;
+    const { padding, graphHeight } = layout;
     if (points.length === 0) return;
 
     const ctx = this.ctx;
+    const firstX = this.xForTime(points[0].time, layout, visibleRange);
+    let lastX = firstX;
+
     ctx.fillStyle = fillColor;
     ctx.beginPath();
-    ctx.moveTo(padding.left, padding.top + graphHeight);
+    ctx.moveTo(firstX, padding.top + graphHeight);
 
     let lastY = padding.top + graphHeight;
     points.forEach((point) => {
@@ -504,10 +513,11 @@ export class BandwidthGrapherEngine {
       ctx.lineTo(x, lastY);
       ctx.lineTo(x, y);
       lastY = y;
+      lastX = x;
     });
 
-    ctx.lineTo(padding.left + graphWidth, lastY);
-    ctx.lineTo(padding.left + graphWidth, padding.top + graphHeight);
+    ctx.lineTo(lastX, lastY);
+    ctx.lineTo(lastX, padding.top + graphHeight);
     ctx.closePath();
     ctx.fill();
   }
@@ -715,10 +725,7 @@ export class BandwidthGrapherEngine {
     const deltaX = x - this.panStartX;
     const deltaTime = -(deltaX / layout.graphWidth) * duration;
 
-    this.range = {
-      start: this.panStartRange.startTime + deltaTime,
-      end: this.panStartRange.endTime + deltaTime,
-    };
+    this.range = this.rangeFromTimeRange(this.clampTimeRange(this.panStartRange.startTime + deltaTime, this.panStartRange.endTime + deltaTime));
     this.followLive = false;
     if (this.options.scale.autoScale) this.updateAutoScale();
     this.render();
@@ -810,6 +817,48 @@ export class BandwidthGrapherEngine {
     return nextDuration;
   }
 
+  private clampTimeRange(start: number, end: number): TimeRange {
+    const normalizedStart = Math.min(start, end);
+    const normalizedEnd = Math.max(start, end);
+    const dataRange = this.getDataTimeRange();
+
+    if (!dataRange) {
+      return {
+        startTime: normalizedStart,
+        endTime: normalizedEnd,
+      };
+    }
+
+    const dataDuration = dataRange.endTime - dataRange.startTime;
+    const requestedDuration = normalizedEnd - normalizedStart;
+
+    if (dataDuration <= 0 || requestedDuration >= dataDuration) {
+      return dataRange;
+    }
+
+    let startTime = normalizedStart;
+    let endTime = normalizedEnd;
+
+    if (startTime < dataRange.startTime) {
+      startTime = dataRange.startTime;
+      endTime = startTime + requestedDuration;
+    }
+
+    if (endTime > dataRange.endTime) {
+      endTime = dataRange.endTime;
+      startTime = endTime - requestedDuration;
+    }
+
+    return { startTime, endTime };
+  }
+
+  private rangeFromTimeRange(range: TimeRange): BandwidthRange {
+    return {
+      start: range.startTime,
+      end: range.endTime,
+    };
+  }
+
   private xForTime(value: Date | number | string, layout: Layout, range: TimeRange): number {
     const duration = Math.max(1, range.endTime - range.startTime);
     const ratio = (toTime(value) - range.startTime) / duration;
@@ -875,15 +924,6 @@ function normalizePoint(point: BandwidthPoint): BandwidthPoint {
     ...point,
     status: point.status ?? "ok",
   };
-}
-
-function normalizeRange(start: BandwidthRange["start"], end: BandwidthRange["end"]): BandwidthRange {
-  const startTime = toTime(start);
-  const endTime = toTime(end);
-
-  return startTime <= endTime
-    ? { start, end }
-    : { start: end, end: start };
 }
 
 function comparePointTime(a: BandwidthPoint, b: BandwidthPoint): number {
