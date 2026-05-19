@@ -179,6 +179,7 @@ export class BandwidthGrapherEngine {
       this.drawLineStep(outboundData, this.options.colors.outboundLine, layout);
     }
 
+    this.drawTimeoutRanges(visiblePoints, layout);
     this.drawBorder(layout);
     this.drawSummary(layout);
     this.drawWatermark(width, height);
@@ -301,7 +302,6 @@ export class BandwidthGrapherEngine {
     ctx.lineTo(padding.left + graphWidth, padding.top + graphHeight);
     ctx.closePath();
     ctx.fill();
-    this.drawTimeoutBlocks(data, layout, stepWidth);
   }
 
   private drawLineLinear(data: Array<number | null>, lineColor: string, layout: Layout): void {
@@ -393,18 +393,39 @@ export class BandwidthGrapherEngine {
     ctx.lineTo(padding.left + graphWidth, padding.top + graphHeight);
     ctx.closePath();
     ctx.fill();
-    this.drawTimeoutBlocks(data, layout, stepWidth);
   }
 
-  private drawTimeoutBlocks(data: Array<number | null>, layout: Layout, stepWidth: number): void {
-    const { padding, graphHeight } = layout;
+  private drawTimeoutRanges(points: BandwidthPoint[], layout: Layout): void {
+    const { padding, graphWidth, graphHeight } = layout;
+    if (points.length === 0) return;
+
     const ctx = this.ctx;
+    const stepWidth = graphWidth / Math.max(1, points.length - 1);
+    const graphLeft = padding.left;
+    const graphRight = padding.left + graphWidth;
+
     ctx.fillStyle = this.options.colors.timeoutFill;
 
-    data.forEach((point, index) => {
-      if (point !== null) return;
-      const x = padding.left + index * stepWidth - stepWidth / 2;
-      ctx.fillRect(x, padding.top, Math.max(1, stepWidth), graphHeight);
+    let rangeStartIndex: number | null = null;
+
+    points.forEach((point, index) => {
+      const isTimeout = isTimeoutPoint(point);
+
+      if (isTimeout && rangeStartIndex === null) {
+        rangeStartIndex = index;
+      }
+
+      const isLastPoint = index === points.length - 1;
+      if (rangeStartIndex === null || (isTimeout && !isLastPoint)) return;
+
+      const rangeEndIndex = isTimeout && isLastPoint ? index : index - 1;
+      const startX = rangeStartIndex === 0 ? graphLeft : padding.left + rangeStartIndex * stepWidth - stepWidth / 2;
+      const endX = rangeEndIndex === points.length - 1 ? graphRight : padding.left + rangeEndIndex * stepWidth + stepWidth / 2;
+      const x = Math.max(graphLeft, Math.floor(startX));
+      const width = Math.max(1, Math.ceil(Math.min(graphRight, endX) - x));
+
+      ctx.fillRect(x, padding.top, width, graphHeight);
+      rangeStartIndex = null;
     });
   }
 
@@ -601,6 +622,10 @@ function normalizePoint(point: BandwidthPoint): BandwidthPoint {
     ...point,
     status: point.status ?? "ok",
   };
+}
+
+function isTimeoutPoint(point: BandwidthPoint): boolean {
+  return point.status === "timeout" || point.status === "error" || point.inboundBps === null || point.outboundBps === null;
 }
 
 function toTime(value: Date | number | string): number {

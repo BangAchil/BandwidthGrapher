@@ -25,6 +25,7 @@ startLive();
 
 document.getElementById("live")?.addEventListener("click", startLive);
 document.getElementById("timeout")?.addEventListener("click", () => graph.pushTimeout());
+document.getElementById("timeout-range")?.addEventListener("click", pushTimeoutRange);
 document.getElementById("history")?.addEventListener("click", loadHistory);
 document.getElementById("threshold")?.addEventListener("click", toggleThreshold);
 document.getElementById("export")?.addEventListener("click", () => {
@@ -64,6 +65,17 @@ function toggleThreshold(): void {
         ]
       : [],
   });
+}
+
+function pushTimeoutRange(): void {
+  if (timer !== null) window.clearInterval(timer);
+
+  const start = Date.now();
+  for (let index = 0; index < 12; index += 1) {
+    graph.pushTimeout(new Date(start + index * 2_000));
+  }
+
+  graph.appendPoint(createPoint(new Date(start + 24_000)));
 }
 
 function createPoint(time: Date): BandwidthPoint {

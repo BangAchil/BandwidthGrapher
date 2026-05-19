@@ -22,7 +22,7 @@ export const defaultOptions: BandwidthGrapherOptions = {
     textWatermark: "rgba(15, 23, 42, 0.14)",
     inboundFill: "#2bc56a",
     outboundLine: "#0050ff",
-    timeoutFill: "rgba(185, 28, 28, 0.72)",
+    timeoutFill: "#b91c1c",
     thresholdLine: "#f59e0b",
     tooltipBackground: "rgba(15, 23, 42, 0.92)",
     tooltipText: "#ffffff",
