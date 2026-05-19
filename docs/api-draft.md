@@ -104,5 +104,5 @@ graphRef.current?.resetRange();
 - `time`: intervalSeconds, maxDataPoints, range.
 - `thresholds`: warning/critical lines or areas.
 - `theme`: colors, fonts, spacing.
-- `interaction`: tooltip, wheelZoom, dragPan, hover line, minRangeMs.
+- `interaction`: tooltip, wheelZoom, dragSelectZoom, dragPan, hover line, selectionMinWidth, minRangeMs.
 - `export`: image/data behavior.

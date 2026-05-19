@@ -32,7 +32,8 @@ Yang dicek:
 - tombol threshold menampilkan garis threshold
 - tombol zoom/pan mengubah range waktu
 - mouse wheel melakukan zoom terhadap posisi cursor
-- drag canvas menggeser range waktu
+- drag kiri di area graph membuat selection box dan zoom ke area tersebut saat mouse dilepas
+- `Alt + drag` atau middle mouse drag menggeser range waktu
 - tombol `Fit data` kembali ke seluruh range history
 - tombol `Follow live` kembali ke trailing live range
 - tombol export mengunduh PNG

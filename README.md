@@ -58,7 +58,7 @@ graph.fitDataRange();
 graph.resetRange(); // back to follow-live
 ```
 
-Mouse wheel zoom and drag pan are enabled by default.
+Mouse wheel zoom and drag-select zoom are enabled by default. Use `Alt + drag`, middle mouse drag, or the pan API/buttons to pan.
 
 ## Theme
 

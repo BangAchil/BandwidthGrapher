@@ -14,6 +14,8 @@ export const kingNmsTheme: BandwidthGrapherUserOptions = {
     outboundLine: "#4aa3ff",
     timeoutFill: "#c91f1f",
     thresholdLine: "#ffb020",
+    selectionFill: "rgba(255, 138, 29, 0.18)",
+    selectionBorder: "#ff8a1d",
     tooltipBackground: "rgba(3, 10, 24, 0.94)",
     tooltipText: "#ffffff",
   },

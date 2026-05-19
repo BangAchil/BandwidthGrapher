@@ -36,6 +36,8 @@ export type BandwidthGrapherColors = {
   outboundLine: string;
   timeoutFill: string;
   thresholdLine: string;
+  selectionFill: string;
+  selectionBorder: string;
   tooltipBackground: string;
   tooltipText: string;
 };
@@ -60,6 +62,8 @@ export type BandwidthGrapherInteractionOptions = {
   hoverLine: boolean;
   wheelZoom: boolean;
   dragPan: boolean;
+  dragSelectZoom: boolean;
+  selectionMinWidth: number;
   minRangeMs: number;
   maxRangeMs?: number;
 };

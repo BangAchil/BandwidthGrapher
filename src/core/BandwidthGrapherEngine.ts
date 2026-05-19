@@ -51,8 +51,11 @@ export class BandwidthGrapherEngine {
   private resizeObserver: ResizeObserver | null = null;
   private rafId: number | null = null;
   private isPanning = false;
+  private isSelecting = false;
   private panStartX = 0;
   private panStartRange: TimeRange | null = null;
+  private selectionStartX = 0;
+  private selectionCurrentX = 0;
 
   private readonly handleMouseMoveBound = (event: MouseEvent) => this.handleMouseMove(event);
   private readonly handleMouseOutBound = () => this.handleMouseOut();
@@ -304,6 +307,7 @@ export class BandwidthGrapherEngine {
     this.drawBorder(layout);
     this.drawSummary(layout, visiblePoints);
     this.drawWatermark(width, height);
+    this.drawSelectionOverlay(layout);
 
     if (highlightX !== null && this.options.interaction.hoverLine) {
       this.drawHighlightLine(padding, graphHeight, highlightX);
@@ -634,8 +638,30 @@ export class BandwidthGrapherEngine {
     this.ctx.stroke();
   }
 
+  private drawSelectionOverlay(layout: Layout): void {
+    if (!this.isSelecting) return;
+
+    const { padding, graphHeight } = layout;
+    const graphLeft = padding.left;
+    const graphRight = padding.left + layout.graphWidth;
+    const startX = clamp(this.selectionStartX, graphLeft, graphRight);
+    const currentX = clamp(this.selectionCurrentX, graphLeft, graphRight);
+    const x = Math.min(startX, currentX);
+    const width = Math.abs(currentX - startX);
+    if (width < 1) return;
+
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.fillStyle = this.options.colors.selectionFill;
+    ctx.strokeStyle = this.options.colors.selectionBorder;
+    ctx.lineWidth = 1;
+    ctx.fillRect(x, padding.top, width, graphHeight);
+    ctx.strokeRect(Math.floor(x) + 0.5, padding.top + 0.5, Math.max(1, Math.floor(width)), graphHeight - 1);
+    ctx.restore();
+  }
+
   private handleMouseMove(event: MouseEvent): void {
-    if (this.isPanning || !this.options.interaction.tooltip) return;
+    if (this.isPanning || this.isSelecting || !this.options.interaction.tooltip) return;
 
     const layout = this.createLayout();
     const visibleRange = this.getVisibleTimeRange();
@@ -677,7 +703,7 @@ export class BandwidthGrapherEngine {
   }
 
   private handleMouseOut(): void {
-    if (this.isPanning) return;
+    if (this.isPanning || this.isSelecting) return;
     this.tooltip.style.display = "none";
     this.render();
   }
@@ -700,7 +726,9 @@ export class BandwidthGrapherEngine {
   }
 
   private handleMouseDown(event: MouseEvent): void {
-    if (!this.options.interaction.dragPan || event.button !== 0) return;
+    const wantsPan = this.options.interaction.dragPan && (event.altKey || event.button === 1 || (!this.options.interaction.dragSelectZoom && event.button === 0));
+    const wantsSelectZoom = this.options.interaction.dragSelectZoom && event.button === 0 && !event.altKey;
+    if (!wantsPan && !wantsSelectZoom) return;
 
     const layout = this.createLayout();
     const rect = this.canvas.getBoundingClientRect();
@@ -710,19 +738,39 @@ export class BandwidthGrapherEngine {
     const inside = x > padding.left && x < layout.width - padding.right && y > padding.top && y < layout.height - padding.bottom;
     if (!inside) return;
 
-    this.isPanning = true;
-    this.panStartX = x;
-    this.panStartRange = this.getVisibleTimeRange();
+    event.preventDefault();
     this.tooltip.style.display = "none";
-    this.canvas.style.cursor = "grabbing";
+
+    if (wantsPan) {
+      this.isPanning = true;
+      this.panStartX = x;
+      this.panStartRange = this.getVisibleTimeRange();
+      this.canvas.style.cursor = "grabbing";
+      return;
+    }
+
+    this.isSelecting = true;
+    this.selectionStartX = x;
+    this.selectionCurrentX = x;
+    this.canvas.style.cursor = "crosshair";
+    this.render();
   }
 
   private handleWindowMouseMove(event: MouseEvent): void {
-    if (!this.isPanning || !this.panStartRange) return;
-
     const layout = this.createLayout();
     const rect = this.canvas.getBoundingClientRect();
     const x = event.clientX - rect.left;
+    const graphLeft = layout.padding.left;
+    const graphRight = layout.padding.left + layout.graphWidth;
+
+    if (this.isSelecting) {
+      this.selectionCurrentX = clamp(x, graphLeft, graphRight);
+      this.render();
+      return;
+    }
+
+    if (!this.isPanning || !this.panStartRange) return;
+
     const duration = this.panStartRange.endTime - this.panStartRange.startTime;
     const deltaX = x - this.panStartX;
     const deltaTime = -(deltaX / layout.graphWidth) * duration;
@@ -734,6 +782,28 @@ export class BandwidthGrapherEngine {
   }
 
   private handleWindowMouseUp(): void {
+    if (this.isSelecting) {
+      const layout = this.createLayout();
+      const selectionWidth = Math.abs(this.selectionCurrentX - this.selectionStartX);
+      const minWidth = this.options.interaction.selectionMinWidth;
+
+      this.isSelecting = false;
+      this.canvas.style.cursor = "";
+
+      if (selectionWidth >= minWidth) {
+        const visibleRange = this.getVisibleTimeRange();
+        const startX = clamp(this.selectionStartX, layout.padding.left, layout.padding.left + layout.graphWidth);
+        const endX = clamp(this.selectionCurrentX, layout.padding.left, layout.padding.left + layout.graphWidth);
+        const startTime = this.timeForX(Math.min(startX, endX), layout, visibleRange);
+        const endTime = this.timeForX(Math.max(startX, endX), layout, visibleRange);
+        this.setRange(startTime, endTime);
+        return;
+      }
+
+      this.render();
+      return;
+    }
+
     if (!this.isPanning) return;
     this.isPanning = false;
     this.panStartRange = null;
@@ -938,6 +1008,10 @@ function isTimeoutPoint(point: BandwidthPoint): boolean {
 
 function midpoint(a: number, b: number): number {
   return a + (b - a) / 2;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function toTime(value: Date | number | string): number {
