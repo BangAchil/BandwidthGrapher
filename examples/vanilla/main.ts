@@ -1,13 +1,19 @@
 import { BandwidthGrapherEngine, type BandwidthPoint } from "../../src";
 
 const container = document.getElementById("graph");
+const streamStatus = document.getElementById("stream-status");
 if (!container) throw new Error("Graph container not found.");
+
+const realInterfaceName = "FTTH Main Link";
+const realStreamPath = `/romon-sse/app/api/stream_interface_traffic.php?router_id=6&names=${encodeURIComponent(
+  "FTTH Main Link,sfp-sfpplus1",
+)}`;
 
 const graph = new BandwidthGrapherEngine(container, {
   title: {
     host: "Router 2",
     ip: "103.158.27.6",
-    interfaceName: "FTTH Main Link",
+    interfaceName: realInterfaceName,
   },
   maxDataPoints: 400,
   intervalSeconds: 2,
@@ -18,11 +24,19 @@ const graph = new BandwidthGrapherEngine(container, {
 });
 
 let timer: number | null = null;
+let realStream: EventSource | null = null;
+let realStreamTimeout: number | null = null;
 let thresholdsEnabled = false;
 
 loadDbLive();
 
 document.getElementById("live")?.addEventListener("click", startLiveOnly);
+document.getElementById("romon-live")?.addEventListener("click", startRomonLive);
+document.getElementById("stop-stream")?.addEventListener("click", () => {
+  stopLive();
+  stopRealStream();
+  setStatus("Source: stopped");
+});
 document.getElementById("db-only")?.addEventListener("click", loadDbOnly);
 document.getElementById("db-live")?.addEventListener("click", loadDbLive);
 document.getElementById("timeout")?.addEventListener("click", () => graph.pushTimeout());
@@ -47,18 +61,24 @@ document.getElementById("export")?.addEventListener("click", () => {
 });
 
 function startLiveOnly(): void {
+  stopRealStream();
   graph.setData([], { mode: "live", followLive: true });
   startLive();
+  setStatus("Source: dummy live");
 }
 
 function loadDbOnly(): void {
   stopLive();
+  stopRealStream();
   graph.setData(createHistoryPoints(), { mode: "history", range: "data" });
+  setStatus("Source: dummy DB-only");
 }
 
 function loadDbLive(): void {
+  stopRealStream();
   graph.setData(createHistoryPoints(), { mode: "history-live", followLive: true });
   startLive();
+  setStatus("Source: dummy DB + live");
 }
 
 function startLive(): void {
@@ -75,6 +95,65 @@ function stopLive(): void {
   }
 }
 
+function startRomonLive(): void {
+  stopLive();
+  stopRealStream();
+  graph.setData([], { mode: "live", followLive: true });
+  graph.setOptions({
+    title: {
+      host: "Router 2",
+      ip: "103.158.27.6",
+      interfaceName: realInterfaceName,
+    },
+  });
+
+  setStatus("Source: connecting to romon SSE...");
+  realStream = new EventSource(realStreamPath);
+  resetRealStreamTimeout();
+
+  realStream.onopen = () => {
+    setStatus("Source: romon SSE connected");
+    resetRealStreamTimeout();
+  };
+
+  realStream.onmessage = (event) => {
+    resetRealStreamTimeout();
+    const point = parseRomonPoint(event.data, realInterfaceName);
+    if (!point) {
+      console.debug("Ignored romon SSE payload", event.data);
+      return;
+    }
+    graph.appendPoint(point);
+    setStatus(`Source: romon SSE live (${realInterfaceName})`);
+  };
+
+  realStream.onerror = () => {
+    setStatus("Source: romon SSE error or disconnected");
+    graph.pushTimeout();
+    stopRealStream();
+  };
+}
+
+function stopRealStream(): void {
+  if (realStream) {
+    realStream.close();
+    realStream = null;
+  }
+
+  if (realStreamTimeout !== null) {
+    window.clearTimeout(realStreamTimeout);
+    realStreamTimeout = null;
+  }
+}
+
+function resetRealStreamTimeout(): void {
+  if (realStreamTimeout !== null) window.clearTimeout(realStreamTimeout);
+  realStreamTimeout = window.setTimeout(() => {
+    graph.pushTimeout();
+    resetRealStreamTimeout();
+  }, 10_000);
+}
+
 function toggleThreshold(): void {
   thresholdsEnabled = !thresholdsEnabled;
   graph.setOptions({
@@ -89,6 +168,7 @@ function toggleThreshold(): void {
 
 function pushTimeoutRange(): void {
   stopLive();
+  stopRealStream();
 
   const start = Date.now();
   for (let index = 0; index < 12; index += 1) {
@@ -96,6 +176,7 @@ function pushTimeoutRange(): void {
   }
 
   graph.appendPoint(createPoint(new Date(start + 24_000)));
+  setStatus("Source: manual timeout range");
 }
 
 function createHistoryPoints(): BandwidthPoint[] {
@@ -122,4 +203,107 @@ function createPoint(time: Date): BandwidthPoint {
     outboundBps,
     status: "ok",
   };
+}
+
+function parseRomonPoint(rawData: string, interfaceName: string): BandwidthPoint | null {
+  if (!rawData.trim()) return null;
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(rawData);
+  } catch {
+    return null;
+  }
+
+  const candidate = findInterfacePayload(payload, interfaceName) ?? findTrafficPayload(payload);
+  if (!candidate || typeof candidate !== "object") return null;
+
+  const record = candidate as Record<string, unknown>;
+  const inboundBps = firstNumber(record, ["rx_bps", "rxBps", "rx", "inboundBps", "in_bps", "input_bps"]);
+  const outboundBps = firstNumber(record, ["tx_bps", "txBps", "tx", "outboundBps", "out_bps", "output_bps"]);
+  if (inboundBps === null || outboundBps === null) return null;
+
+  return {
+    time: firstTime(record) ?? new Date(),
+    inboundBps,
+    outboundBps,
+    status: "ok",
+  };
+}
+
+function findInterfacePayload(payload: unknown, interfaceName: string): unknown {
+  if (!payload || typeof payload !== "object") return null;
+
+  const record = payload as Record<string, unknown>;
+  const direct = record[interfaceName];
+  if (direct) return direct;
+
+  for (const key of ["interfaces", "data", "results", "traffic"]) {
+    const value = record[key];
+    if (!value) continue;
+
+    if (Array.isArray(value)) {
+      const match = value.find((item) => {
+        if (!item || typeof item !== "object") return false;
+        const itemRecord = item as Record<string, unknown>;
+        return [itemRecord.name, itemRecord.interface, itemRecord.interface_name, itemRecord.ifName].includes(interfaceName);
+      });
+      if (match) return match;
+    }
+
+    if (typeof value === "object") {
+      const nested = value as Record<string, unknown>;
+      if (nested[interfaceName]) return nested[interfaceName];
+    }
+  }
+
+  return null;
+}
+
+function findTrafficPayload(payload: unknown): Record<string, unknown> | null {
+  if (!payload || typeof payload !== "object") return null;
+
+  const record = payload as Record<string, unknown>;
+  if (firstNumber(record, ["rx_bps", "rxBps", "rx", "inboundBps"]) !== null) return record;
+
+  for (const value of Object.values(record)) {
+    if (Array.isArray(value)) {
+      const match = value.map(findTrafficPayload).find(Boolean);
+      if (match) return match;
+    } else if (value && typeof value === "object") {
+      const match = findTrafficPayload(value);
+      if (match) return match;
+    }
+  }
+
+  return null;
+}
+
+function firstNumber(record: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim() !== "") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+
+  return null;
+}
+
+function firstTime(record: Record<string, unknown>): Date | null {
+  for (const key of ["time", "timestamp", "created_at", "date"]) {
+    const value = record[key];
+    if (typeof value === "number" || typeof value === "string") {
+      const date = new Date(value);
+      if (!Number.isNaN(date.getTime())) return date;
+    }
+  }
+
+  return null;
+}
+
+function setStatus(message: string): void {
+  if (streamStatus) streamStatus.textContent = message;
 }
