@@ -120,17 +120,18 @@ function startRomonLive(): void {
     resetRealStreamTimeout();
     const point = parseRomonPoint(event.data, realInterfaceName);
     if (!point) {
+      setStatus(`Source: romon event ignored (${shorten(event.data)})`);
       console.debug("Ignored romon SSE payload", event.data);
       return;
     }
     graph.appendPoint(point);
-    setStatus(`Source: romon SSE live (${realInterfaceName})`);
+    setStatus(`Source: romon SSE live (${realInterfaceName}) rx=${formatMbps(point.inboundBps)} tx=${formatMbps(point.outboundBps)}`);
   };
 
   realStream.onerror = () => {
-    setStatus("Source: romon SSE error or disconnected");
+    setStatus("Source: romon SSE reconnecting...");
     graph.pushTimeout();
-    stopRealStream();
+    resetRealStreamTimeout();
   };
 }
 
@@ -206,16 +207,17 @@ function createPoint(time: Date): BandwidthPoint {
 }
 
 function parseRomonPoint(rawData: string, interfaceName: string): BandwidthPoint | null {
-  if (!rawData.trim()) return null;
+  const cleanedData = rawData.trim().replace(/^data:\s*/i, "");
+  if (!cleanedData) return null;
 
   let payload: unknown;
   try {
-    payload = JSON.parse(rawData);
+    payload = JSON.parse(cleanedData);
   } catch {
     return null;
   }
 
-  const candidate = findInterfacePayload(payload, interfaceName) ?? findTrafficPayload(payload);
+  const candidate = findInterfacePayload(payload, interfaceName) ?? findTrafficPayload(payload, interfaceName);
   if (!candidate || typeof candidate !== "object") return null;
 
   const record = candidate as Record<string, unknown>;
@@ -235,6 +237,8 @@ function findInterfacePayload(payload: unknown, interfaceName: string): unknown 
   if (!payload || typeof payload !== "object") return null;
 
   const record = payload as Record<string, unknown>;
+  if (matchesInterface(record, interfaceName)) return record;
+
   const direct = record[interfaceName];
   if (direct) return direct;
 
@@ -245,8 +249,7 @@ function findInterfacePayload(payload: unknown, interfaceName: string): unknown 
     if (Array.isArray(value)) {
       const match = value.find((item) => {
         if (!item || typeof item !== "object") return false;
-        const itemRecord = item as Record<string, unknown>;
-        return [itemRecord.name, itemRecord.interface, itemRecord.interface_name, itemRecord.ifName].includes(interfaceName);
+        return matchesInterface(item as Record<string, unknown>, interfaceName);
       });
       if (match) return match;
     }
@@ -260,23 +263,44 @@ function findInterfacePayload(payload: unknown, interfaceName: string): unknown 
   return null;
 }
 
-function findTrafficPayload(payload: unknown): Record<string, unknown> | null {
+function findTrafficPayload(payload: unknown, interfaceName?: string): Record<string, unknown> | null {
   if (!payload || typeof payload !== "object") return null;
 
   const record = payload as Record<string, unknown>;
-  if (firstNumber(record, ["rx_bps", "rxBps", "rx", "inboundBps"]) !== null) return record;
+  if (firstNumber(record, ["rx_bps", "rxBps", "rx", "inboundBps"]) !== null) {
+    if (!interfaceName || !hasInterfaceIdentity(record) || matchesInterface(record, interfaceName)) return record;
+  }
 
   for (const value of Object.values(record)) {
     if (Array.isArray(value)) {
-      const match = value.map(findTrafficPayload).find(Boolean);
+      const match = value.map((item) => findTrafficPayload(item, interfaceName)).find(Boolean);
       if (match) return match;
     } else if (value && typeof value === "object") {
-      const match = findTrafficPayload(value);
+      const match = findTrafficPayload(value, interfaceName);
       if (match) return match;
     }
   }
 
   return null;
+}
+
+function matchesInterface(record: Record<string, unknown>, interfaceName: string): boolean {
+  const candidates = [
+    record.targetId,
+    record.name,
+    record.interface,
+    record.interface_name,
+    record.ifName,
+  ];
+
+  return candidates.some((value) => {
+    if (typeof value !== "string") return false;
+    return value === interfaceName || value.endsWith(`|${interfaceName}`);
+  });
+}
+
+function hasInterfaceIdentity(record: Record<string, unknown>): boolean {
+  return ["targetId", "name", "interface", "interface_name", "ifName"].some((key) => typeof record[key] === "string");
 }
 
 function firstNumber(record: Record<string, unknown>, keys: string[]): number | null {
@@ -306,4 +330,13 @@ function firstTime(record: Record<string, unknown>): Date | null {
 
 function setStatus(message: string): void {
   if (streamStatus) streamStatus.textContent = message;
+}
+
+function formatMbps(value: number | null): string {
+  if (value === null) return "N/A";
+  return `${(value / 1_000_000).toFixed(1)}M`;
+}
+
+function shorten(value: string): string {
+  return value.length > 90 ? `${value.slice(0, 90)}...` : value;
 }
