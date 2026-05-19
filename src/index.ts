@@ -13,9 +13,11 @@ export type {
   BandwidthGrapherSnapshot,
   BandwidthGrapherUserOptions,
   BandwidthGraphStyle,
+  BandwidthDataMode,
   BandwidthPoint,
   BandwidthPointStatus,
   BandwidthRange,
+  BandwidthSetDataOptions,
   BandwidthThreshold,
   BandwidthTitle,
 } from "./core/types";

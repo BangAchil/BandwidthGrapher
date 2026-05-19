@@ -41,6 +41,9 @@ export const defaultOptions: BandwidthGrapherOptions = {
   interaction: {
     tooltip: true,
     hoverLine: true,
+    wheelZoom: true,
+    dragPan: true,
+    minRangeMs: 30_000,
   },
   thresholds: [],
 };

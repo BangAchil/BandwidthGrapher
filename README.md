@@ -32,6 +32,34 @@ graph.appendPoint({
 });
 ```
 
+## Data modes
+
+```ts
+// DB-only
+graph.setData(historyPoints, { mode: "history", range: "data" });
+
+// DB + live
+graph.setData(historyPoints, { mode: "history-live", followLive: true });
+graph.appendPoint(livePoint);
+
+// Live SSE only
+graph.setData([], { mode: "live", followLive: true });
+graph.appendPoint(livePoint);
+```
+
+## Range, Zoom, Pan
+
+```ts
+graph.setRange(startTime, endTime);
+graph.zoomIn();
+graph.zoomOut();
+graph.panPercent(0.25);
+graph.fitDataRange();
+graph.resetRange(); // back to follow-live
+```
+
+Mouse wheel zoom and drag pan are enabled by default.
+
 ## Theme
 
 KING NMS theme tersedia sebagai preset:

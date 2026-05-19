@@ -22,6 +22,8 @@ export type BandwidthThreshold = {
 
 export type BandwidthGraphStyle = "step" | "linear";
 
+export type BandwidthDataMode = "live" | "history" | "history-live";
+
 export type BandwidthGrapherColors = {
   background: string;
   grid: string;
@@ -56,6 +58,10 @@ export type BandwidthGrapherScaleOptions = {
 export type BandwidthGrapherInteractionOptions = {
   tooltip: boolean;
   hoverLine: boolean;
+  wheelZoom: boolean;
+  dragPan: boolean;
+  minRangeMs: number;
+  maxRangeMs?: number;
 };
 
 export type BandwidthGrapherOptions = {
@@ -88,8 +94,16 @@ export type BandwidthRange = {
   end: Date | number | string;
 };
 
+export type BandwidthSetDataOptions = {
+  mode?: BandwidthDataMode;
+  range?: BandwidthRange | "data";
+  followLive?: boolean;
+};
+
 export type BandwidthGrapherSnapshot = {
   points: BandwidthPoint[];
   range: BandwidthRange | null;
+  mode: BandwidthDataMode;
+  followLive: boolean;
   options: BandwidthGrapherOptions;
 };

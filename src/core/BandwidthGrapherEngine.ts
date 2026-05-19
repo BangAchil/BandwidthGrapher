@@ -3,11 +3,13 @@ import { formatBps, formatClock } from "./format";
 import { calculateGridIntervalSeconds, calculateNiceCeiling } from "./scale";
 import { calculateStats, type BandwidthStats } from "./stats";
 import type {
+  BandwidthDataMode,
   BandwidthGrapherOptions,
   BandwidthGrapherSnapshot,
   BandwidthGrapherUserOptions,
   BandwidthPoint,
   BandwidthRange,
+  BandwidthSetDataOptions,
 } from "./types";
 
 type Padding = {
@@ -25,6 +27,13 @@ type Layout = {
   graphHeight: number;
 };
 
+type TimeRange = {
+  startTime: number;
+  endTime: number;
+};
+
+type SeriesKey = "inboundBps" | "outboundBps";
+
 const defaultPadding: Padding = { top: 30, right: 15, bottom: 75, left: 60 };
 
 export class BandwidthGrapherEngine {
@@ -36,12 +45,21 @@ export class BandwidthGrapherEngine {
   private options: BandwidthGrapherOptions;
   private points: BandwidthPoint[] = [];
   private range: BandwidthRange | null = null;
+  private dataMode: BandwidthDataMode = "history-live";
+  private followLive = true;
   private currentMaxY: number;
   private resizeObserver: ResizeObserver | null = null;
   private rafId: number | null = null;
+  private isPanning = false;
+  private panStartX = 0;
+  private panStartRange: TimeRange | null = null;
 
   private readonly handleMouseMoveBound = (event: MouseEvent) => this.handleMouseMove(event);
   private readonly handleMouseOutBound = () => this.handleMouseOut();
+  private readonly handleWheelBound = (event: WheelEvent) => this.handleWheel(event);
+  private readonly handleMouseDownBound = (event: MouseEvent) => this.handleMouseDown(event);
+  private readonly handleWindowMouseMoveBound = (event: MouseEvent) => this.handleWindowMouseMove(event);
+  private readonly handleWindowMouseUpBound = () => this.handleWindowMouseUp();
 
   constructor(container: HTMLElement, options: BandwidthGrapherUserOptions = {}) {
     this.container = container;
@@ -75,6 +93,10 @@ export class BandwidthGrapherEngine {
     this.container.append(this.canvas, this.tooltip);
     this.canvas.addEventListener("mousemove", this.handleMouseMoveBound);
     this.canvas.addEventListener("mouseout", this.handleMouseOutBound);
+    this.canvas.addEventListener("wheel", this.handleWheelBound, { passive: false });
+    this.canvas.addEventListener("mousedown", this.handleMouseDownBound);
+    window.addEventListener("mousemove", this.handleWindowMouseMoveBound);
+    window.addEventListener("mouseup", this.handleWindowMouseUpBound);
 
     if (typeof ResizeObserver !== "undefined") {
       this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -84,15 +106,29 @@ export class BandwidthGrapherEngine {
     this.render();
   }
 
-  setData(points: BandwidthPoint[]): void {
-    this.points = points.map(normalizePoint);
+  setData(points: BandwidthPoint[], dataOptions: BandwidthSetDataOptions = {}): void {
+    this.points = points.map(normalizePoint).sort(comparePointTime);
+
+    if (dataOptions.mode) this.dataMode = dataOptions.mode;
+    if (dataOptions.followLive !== undefined) this.followLive = dataOptions.followLive;
+
+    if (dataOptions.range === "data" || (!dataOptions.range && this.dataMode === "history")) {
+      this.fitDataRange();
+    } else if (dataOptions.range) {
+      this.setRange(dataOptions.range.start, dataOptions.range.end);
+    } else if (this.followLive) {
+      this.range = null;
+    }
+
     if (this.options.scale.autoScale) this.updateAutoScale();
     this.render();
   }
 
   appendPoint(point: BandwidthPoint): void {
     this.points.push(normalizePoint(point));
-    this.trimLiveBuffer();
+    this.points.sort(comparePointTime);
+    if (this.dataMode === "live") this.trimLiveBuffer();
+    if (this.followLive) this.range = null;
     if (this.options.scale.autoScale) this.updateAutoScale();
     this.render();
   }
@@ -101,16 +137,72 @@ export class BandwidthGrapherEngine {
     this.appendPoint({ time, inboundBps: null, outboundBps: null, status: "timeout" });
   }
 
+  setMode(mode: BandwidthDataMode): void {
+    this.dataMode = mode;
+    if (mode === "live" || mode === "history-live") this.followLive = true;
+    if (mode === "history") this.fitDataRange();
+    this.render();
+  }
+
   setRange(start: BandwidthRange["start"], end: BandwidthRange["end"]): void {
-    this.range = { start, end };
+    this.range = normalizeRange(start, end);
+    this.followLive = false;
     if (this.options.scale.autoScale) this.updateAutoScale();
     this.render();
   }
 
   resetRange(): void {
     this.range = null;
+    this.followLive = true;
     if (this.options.scale.autoScale) this.updateAutoScale();
     this.render();
+  }
+
+  fitDataRange(): void {
+    const dataRange = this.getDataTimeRange();
+    if (!dataRange) return;
+    this.range = {
+      start: dataRange.startTime,
+      end: dataRange.endTime,
+    };
+    this.followLive = false;
+    if (this.options.scale.autoScale) this.updateAutoScale();
+    this.render();
+  }
+
+  zoom(factor: number, anchor?: Date | number | string): void {
+    if (!Number.isFinite(factor) || factor <= 0) return;
+
+    const currentRange = this.getVisibleTimeRange();
+    const duration = currentRange.endTime - currentRange.startTime;
+    const anchorTime = anchor !== undefined ? toTime(anchor) : currentRange.startTime + duration / 2;
+    const nextDuration = this.clampRangeDuration(duration * factor);
+    const ratio = duration <= 0 ? 0.5 : (anchorTime - currentRange.startTime) / duration;
+    const startTime = anchorTime - nextDuration * ratio;
+    const endTime = startTime + nextDuration;
+
+    this.setRange(startTime, endTime);
+  }
+
+  zoomIn(anchor?: Date | number | string): void {
+    this.zoom(0.75, anchor);
+  }
+
+  zoomOut(anchor?: Date | number | string): void {
+    this.zoom(1.35, anchor);
+  }
+
+  panBy(deltaMs: number): void {
+    if (!Number.isFinite(deltaMs) || deltaMs === 0) return;
+
+    const currentRange = this.getVisibleTimeRange();
+    this.setRange(currentRange.startTime + deltaMs, currentRange.endTime + deltaMs);
+  }
+
+  panPercent(percent: number): void {
+    const currentRange = this.getVisibleTimeRange();
+    const duration = currentRange.endTime - currentRange.startTime;
+    this.panBy(duration * percent);
   }
 
   setOptions(options: BandwidthGrapherUserOptions): void {
@@ -155,6 +247,8 @@ export class BandwidthGrapherEngine {
     return {
       points: this.points.slice(),
       range: this.range,
+      mode: this.dataMode,
+      followLive: this.followLive,
       options: this.options,
     };
   }
@@ -164,6 +258,10 @@ export class BandwidthGrapherEngine {
     this.resizeObserver?.disconnect();
     this.canvas.removeEventListener("mousemove", this.handleMouseMoveBound);
     this.canvas.removeEventListener("mouseout", this.handleMouseOutBound);
+    this.canvas.removeEventListener("wheel", this.handleWheelBound);
+    this.canvas.removeEventListener("mousedown", this.handleMouseDownBound);
+    window.removeEventListener("mousemove", this.handleWindowMouseMoveBound);
+    window.removeEventListener("mouseup", this.handleWindowMouseUpBound);
     this.canvas.remove();
     this.tooltip.remove();
     this.points = [];
@@ -179,32 +277,30 @@ export class BandwidthGrapherEngine {
 
   private drawGraph(highlightX: number | null = null): void {
     const layout = this.createLayout();
-    const { width, height, padding, graphWidth, graphHeight } = layout;
+    const { width, height, padding, graphHeight } = layout;
     const ctx = this.ctx;
+    const visibleRange = this.getVisibleTimeRange();
+    const visiblePoints = this.getVisiblePoints(visibleRange);
 
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = this.options.colors.background;
     ctx.fillRect(0, 0, width, height);
 
     this.drawTitles(padding);
-    this.drawGridAndLabels(layout);
+    this.drawGridAndLabels(layout, visibleRange);
     this.drawThresholds(layout);
 
-    const visiblePoints = this.getVisiblePoints();
-    const inboundData = visiblePoints.map((point) => point.inboundBps);
-    const outboundData = visiblePoints.map((point) => point.outboundBps);
-
     if (this.options.graphStyle === "linear") {
-      this.drawAreaLinear(inboundData, this.options.colors.inboundFill, layout);
-      this.drawLineLinear(outboundData, this.options.colors.outboundLine, layout);
+      this.drawAreaLinear(visiblePoints, "inboundBps", this.options.colors.inboundFill, layout, visibleRange);
+      this.drawLineLinear(visiblePoints, "outboundBps", this.options.colors.outboundLine, layout, visibleRange);
     } else {
-      this.drawAreaStep(inboundData, this.options.colors.inboundFill, layout);
-      this.drawLineStep(outboundData, this.options.colors.outboundLine, layout);
+      this.drawAreaStep(visiblePoints, "inboundBps", this.options.colors.inboundFill, layout, visibleRange);
+      this.drawLineStep(visiblePoints, "outboundBps", this.options.colors.outboundLine, layout, visibleRange);
     }
 
-    this.drawTimeoutRanges(visiblePoints, layout);
+    this.drawTimeoutRanges(visiblePoints, layout, visibleRange);
     this.drawBorder(layout);
-    this.drawSummary(layout);
+    this.drawSummary(layout, visiblePoints);
     this.drawWatermark(width, height);
 
     if (highlightX !== null && this.options.interaction.hoverLine) {
@@ -234,7 +330,7 @@ export class BandwidthGrapherEngine {
     };
   }
 
-  private drawGridAndLabels(layout: Layout): void {
+  private drawGridAndLabels(layout: Layout, visibleRange: TimeRange): void {
     const { padding, graphWidth, graphHeight } = layout;
     const ctx = this.ctx;
 
@@ -258,16 +354,15 @@ export class BandwidthGrapherEngine {
       ctx.fillText(this.formatBps(value), padding.left - 8, y);
     }
 
-    const { startTime, endTime } = this.getVisibleTimeRange();
-    const totalDurationMs = Math.max(1, endTime - startTime);
+    const totalDurationMs = Math.max(1, visibleRange.endTime - visibleRange.startTime);
     const gridIntervalMs = calculateGridIntervalSeconds(totalDurationMs / 1000) * 1000;
-    const firstLabelTime = Math.ceil(startTime / gridIntervalMs) * gridIntervalMs;
+    const firstLabelTime = Math.ceil(visibleRange.startTime / gridIntervalMs) * gridIntervalMs;
 
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
 
-    for (let time = firstLabelTime; time < endTime; time += gridIntervalMs) {
-      const x = padding.left + ((time - startTime) / totalDurationMs) * graphWidth;
+    for (let time = firstLabelTime; time < visibleRange.endTime; time += gridIntervalMs) {
+      const x = this.xForTime(time, layout, visibleRange);
       if (x <= padding.left || x >= padding.left + graphWidth) continue;
 
       ctx.beginPath();
@@ -306,19 +401,18 @@ export class BandwidthGrapherEngine {
     }
   }
 
-  private drawAreaLinear(data: Array<number | null>, fillColor: string, layout: Layout): void {
+  private drawAreaLinear(points: BandwidthPoint[], seriesKey: SeriesKey, fillColor: string, layout: Layout, visibleRange: TimeRange): void {
     const { padding, graphWidth, graphHeight } = layout;
-    if (data.length === 0) return;
+    if (points.length === 0) return;
 
-    const stepWidth = graphWidth / Math.max(1, data.length - 1);
     const ctx = this.ctx;
     ctx.fillStyle = fillColor;
     ctx.beginPath();
     ctx.moveTo(padding.left, padding.top + graphHeight);
 
-    data.forEach((point, index) => {
-      const x = padding.left + index * stepWidth;
-      const yValue = ((point ?? 0) / this.currentMaxY) * graphHeight * this.options.areaHeightFactor;
+    points.forEach((point) => {
+      const x = this.xForTime(point.time, layout, visibleRange);
+      const yValue = ((point[seriesKey] ?? 0) / this.currentMaxY) * graphHeight * this.options.areaHeightFactor;
       ctx.lineTo(x, padding.top + graphHeight - yValue);
     });
 
@@ -327,9 +421,9 @@ export class BandwidthGrapherEngine {
     ctx.fill();
   }
 
-  private drawLineLinear(data: Array<number | null>, lineColor: string, layout: Layout): void {
-    const { padding, graphWidth, graphHeight } = layout;
-    if (data.length === 0) return;
+  private drawLineLinear(points: BandwidthPoint[], seriesKey: SeriesKey, lineColor: string, layout: Layout, visibleRange: TimeRange): void {
+    const { padding, graphHeight } = layout;
+    if (points.length === 0) return;
 
     const ctx = this.ctx;
     ctx.strokeStyle = lineColor;
@@ -338,11 +432,12 @@ export class BandwidthGrapherEngine {
     ctx.beginPath();
 
     let lineActive = false;
-    data.forEach((point, index) => {
-      const x = padding.left + (index / Math.max(1, data.length - 1)) * graphWidth;
+    points.forEach((point) => {
+      const value = point[seriesKey];
+      const x = this.xForTime(point.time, layout, visibleRange);
 
-      if (point !== null) {
-        const y = padding.top + graphHeight - (point / this.currentMaxY) * graphHeight;
+      if (value !== null) {
+        const y = padding.top + graphHeight - (value / this.currentMaxY) * graphHeight;
         if (!lineActive) {
           ctx.moveTo(x, y);
           lineActive = true;
@@ -357,12 +452,11 @@ export class BandwidthGrapherEngine {
     ctx.stroke();
   }
 
-  private drawLineStep(data: Array<number | null>, lineColor: string, layout: Layout): void {
-    const { padding, graphWidth, graphHeight } = layout;
-    if (data.length === 0) return;
+  private drawLineStep(points: BandwidthPoint[], seriesKey: SeriesKey, lineColor: string, layout: Layout, visibleRange: TimeRange): void {
+    const { padding, graphHeight } = layout;
+    if (points.length === 0) return;
 
     const ctx = this.ctx;
-    const stepWidth = graphWidth / Math.max(1, data.length - 1);
     ctx.strokeStyle = lineColor;
     ctx.lineWidth = this.options.outboundLineWidth;
     ctx.lineJoin = "bevel";
@@ -371,14 +465,15 @@ export class BandwidthGrapherEngine {
     let hasActiveLine = false;
     let lastY = padding.top + graphHeight;
 
-    data.forEach((point, index) => {
-      const x = padding.left + index * stepWidth;
-      if (point === null) {
+    points.forEach((point) => {
+      const value = point[seriesKey];
+      const x = this.xForTime(point.time, layout, visibleRange);
+      if (value === null) {
         hasActiveLine = false;
         return;
       }
 
-      const y = padding.top + graphHeight - (point / this.currentMaxY) * graphHeight;
+      const y = padding.top + graphHeight - (value / this.currentMaxY) * graphHeight;
       if (!hasActiveLine) {
         ctx.moveTo(x, y);
         hasActiveLine = true;
@@ -392,20 +487,19 @@ export class BandwidthGrapherEngine {
     ctx.stroke();
   }
 
-  private drawAreaStep(data: Array<number | null>, fillColor: string, layout: Layout): void {
+  private drawAreaStep(points: BandwidthPoint[], seriesKey: SeriesKey, fillColor: string, layout: Layout, visibleRange: TimeRange): void {
     const { padding, graphWidth, graphHeight } = layout;
-    if (data.length === 0) return;
+    if (points.length === 0) return;
 
     const ctx = this.ctx;
-    const stepWidth = graphWidth / Math.max(1, data.length - 1);
     ctx.fillStyle = fillColor;
     ctx.beginPath();
     ctx.moveTo(padding.left, padding.top + graphHeight);
 
     let lastY = padding.top + graphHeight;
-    data.forEach((point, index) => {
-      const x = padding.left + index * stepWidth;
-      const yValue = ((point ?? 0) / this.currentMaxY) * graphHeight * this.options.areaHeightFactor;
+    points.forEach((point) => {
+      const x = this.xForTime(point.time, layout, visibleRange);
+      const yValue = ((point[seriesKey] ?? 0) / this.currentMaxY) * graphHeight * this.options.areaHeightFactor;
       const y = padding.top + graphHeight - yValue;
       ctx.lineTo(x, lastY);
       ctx.lineTo(x, y);
@@ -418,14 +512,13 @@ export class BandwidthGrapherEngine {
     ctx.fill();
   }
 
-  private drawTimeoutRanges(points: BandwidthPoint[], layout: Layout): void {
-    const { padding, graphWidth, graphHeight } = layout;
+  private drawTimeoutRanges(points: BandwidthPoint[], layout: Layout, visibleRange: TimeRange): void {
+    const { padding, graphHeight } = layout;
     if (points.length === 0) return;
 
     const ctx = this.ctx;
-    const stepWidth = graphWidth / Math.max(1, points.length - 1);
     const graphLeft = padding.left;
-    const graphRight = padding.left + graphWidth;
+    const graphRight = padding.left + layout.graphWidth;
 
     ctx.fillStyle = this.options.colors.timeoutFill;
 
@@ -442,8 +535,10 @@ export class BandwidthGrapherEngine {
       if (rangeStartIndex === null || (isTimeout && !isLastPoint)) return;
 
       const rangeEndIndex = isTimeout && isLastPoint ? index : index - 1;
-      const startX = rangeStartIndex === 0 ? graphLeft : padding.left + rangeStartIndex * stepWidth - stepWidth / 2;
-      const endX = rangeEndIndex === points.length - 1 ? graphRight : padding.left + rangeEndIndex * stepWidth + stepWidth / 2;
+      const startTime = this.getPointBandStart(points, rangeStartIndex, visibleRange);
+      const endTime = this.getPointBandEnd(points, rangeEndIndex, visibleRange);
+      const startX = this.xForTime(startTime, layout, visibleRange);
+      const endX = this.xForTime(endTime, layout, visibleRange);
       const x = Math.max(graphLeft, Math.floor(startX));
       const width = Math.max(1, Math.ceil(Math.min(graphRight, endX) - x));
 
@@ -459,12 +554,11 @@ export class BandwidthGrapherEngine {
     this.ctx.strokeRect(padding.left, padding.top, graphWidth, graphHeight);
   }
 
-  private drawSummary(layout: Layout): void {
+  private drawSummary(layout: Layout, visiblePoints: BandwidthPoint[]): void {
     if (!this.options.legend.visible) return;
 
-    const points = this.getVisiblePoints();
-    const inboundStats = calculateStats(points.map((point) => point.inboundBps));
-    const outboundStats = calculateStats(points.map((point) => point.outboundBps));
+    const inboundStats = calculateStats(visiblePoints.map((point) => point.inboundBps));
+    const outboundStats = calculateStats(visiblePoints.map((point) => point.outboundBps));
     const y = layout.height - 45;
 
     this.ctx.font = "11px Arial, sans-serif";
@@ -529,13 +623,14 @@ export class BandwidthGrapherEngine {
   }
 
   private handleMouseMove(event: MouseEvent): void {
-    if (!this.options.interaction.tooltip) return;
+    if (this.isPanning || !this.options.interaction.tooltip) return;
 
     const layout = this.createLayout();
+    const visibleRange = this.getVisibleTimeRange();
     const rect = this.canvas.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
-    const { padding, graphWidth } = layout;
+    const { padding } = layout;
 
     const inside = x > padding.left && x < layout.width - padding.right && y > padding.top && y < layout.height - padding.bottom;
     if (!inside) {
@@ -543,11 +638,11 @@ export class BandwidthGrapherEngine {
       return;
     }
 
-    const visiblePoints = this.getVisiblePoints();
-    const index = Math.round(((x - padding.left) / graphWidth) * Math.max(1, visiblePoints.length - 1));
-    const point = visiblePoints[index];
+    const visiblePoints = this.getVisiblePoints(visibleRange);
+    const point = this.findNearestPointByX(x, visiblePoints, layout, visibleRange);
     if (!point) return;
 
+    const pointX = this.xForTime(point.time, layout, visibleRange);
     this.tooltip.style.display = "block";
     this.tooltip.style.background = this.options.colors.tooltipBackground;
     this.tooltip.style.color = this.options.colors.tooltipText;
@@ -566,16 +661,78 @@ export class BandwidthGrapherEngine {
 
     this.tooltip.style.left = `${left}px`;
     this.tooltip.style.top = `${top}px`;
-    this.drawGraph(x);
+    this.drawGraph(pointX);
   }
 
   private handleMouseOut(): void {
+    if (this.isPanning) return;
     this.tooltip.style.display = "none";
     this.render();
   }
 
+  private handleWheel(event: WheelEvent): void {
+    if (!this.options.interaction.wheelZoom) return;
+
+    const layout = this.createLayout();
+    const rect = this.canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const { padding } = layout;
+    const inside = x > padding.left && x < layout.width - padding.right && y > padding.top && y < layout.height - padding.bottom;
+    if (!inside) return;
+
+    event.preventDefault();
+    const visibleRange = this.getVisibleTimeRange();
+    const anchorTime = this.timeForX(x, layout, visibleRange);
+    this.zoom(event.deltaY > 0 ? 1.2 : 0.82, anchorTime);
+  }
+
+  private handleMouseDown(event: MouseEvent): void {
+    if (!this.options.interaction.dragPan || event.button !== 0) return;
+
+    const layout = this.createLayout();
+    const rect = this.canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const { padding } = layout;
+    const inside = x > padding.left && x < layout.width - padding.right && y > padding.top && y < layout.height - padding.bottom;
+    if (!inside) return;
+
+    this.isPanning = true;
+    this.panStartX = x;
+    this.panStartRange = this.getVisibleTimeRange();
+    this.tooltip.style.display = "none";
+    this.canvas.style.cursor = "grabbing";
+  }
+
+  private handleWindowMouseMove(event: MouseEvent): void {
+    if (!this.isPanning || !this.panStartRange) return;
+
+    const layout = this.createLayout();
+    const rect = this.canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const duration = this.panStartRange.endTime - this.panStartRange.startTime;
+    const deltaX = x - this.panStartX;
+    const deltaTime = -(deltaX / layout.graphWidth) * duration;
+
+    this.range = {
+      start: this.panStartRange.startTime + deltaTime,
+      end: this.panStartRange.endTime + deltaTime,
+    };
+    this.followLive = false;
+    if (this.options.scale.autoScale) this.updateAutoScale();
+    this.render();
+  }
+
+  private handleWindowMouseUp(): void {
+    if (!this.isPanning) return;
+    this.isPanning = false;
+    this.panStartRange = null;
+    this.canvas.style.cursor = "";
+  }
+
   private updateAutoScale(): void {
-    const visiblePoints = this.getVisiblePoints();
+    const visiblePoints = this.getVisiblePoints(this.getVisibleTimeRange());
     const values = visiblePoints
       .flatMap((point) => [point.inboundBps, point.outboundBps])
       .filter((value): value is number => value !== null && value >= 0);
@@ -597,18 +754,14 @@ export class BandwidthGrapherEngine {
     }
   }
 
-  private getVisiblePoints(): BandwidthPoint[] {
-    if (!this.range) return this.points;
-
-    const start = toTime(this.range.start);
-    const end = toTime(this.range.end);
+  private getVisiblePoints(range = this.getVisibleTimeRange()): BandwidthPoint[] {
     return this.points.filter((point) => {
       const time = toTime(point.time);
-      return time >= start && time <= end;
+      return time >= range.startTime && time <= range.endTime;
     });
   }
 
-  private getVisibleTimeRange(): { startTime: number; endTime: number } {
+  private getVisibleTimeRange(): TimeRange {
     if (this.range) {
       return {
         startTime: toTime(this.range.start),
@@ -616,14 +769,92 @@ export class BandwidthGrapherEngine {
       };
     }
 
-    const visiblePoints = this.getVisiblePoints();
-    const lastPoint = visiblePoints[visiblePoints.length - 1];
-    const endTime = lastPoint ? toTime(lastPoint.time) : Date.now();
-    const totalDurationMs = this.options.maxDataPoints * this.options.intervalSeconds * 1000;
+    const dataRange = this.getDataTimeRange();
+    if (!dataRange) {
+      const endTime = Date.now();
+      return {
+        startTime: endTime - this.getDefaultLiveDurationMs(),
+        endTime,
+      };
+    }
+
+    if (this.dataMode === "history" || !this.followLive) {
+      return dataRange;
+    }
+
+    const endTime = dataRange.endTime;
     return {
-      startTime: endTime - totalDurationMs,
+      startTime: endTime - this.getDefaultLiveDurationMs(),
       endTime,
     };
+  }
+
+  private getDataTimeRange(): TimeRange | null {
+    if (this.points.length === 0) return null;
+
+    return {
+      startTime: toTime(this.points[0].time),
+      endTime: toTime(this.points[this.points.length - 1].time),
+    };
+  }
+
+  private getDefaultLiveDurationMs(): number {
+    return this.options.maxDataPoints * this.options.intervalSeconds * 1000;
+  }
+
+  private clampRangeDuration(duration: number): number {
+    const minRangeMs = this.options.interaction.minRangeMs;
+    const maxRangeMs = this.options.interaction.maxRangeMs;
+    let nextDuration = Math.max(minRangeMs, duration);
+    if (maxRangeMs) nextDuration = Math.min(maxRangeMs, nextDuration);
+    return nextDuration;
+  }
+
+  private xForTime(value: Date | number | string, layout: Layout, range: TimeRange): number {
+    const duration = Math.max(1, range.endTime - range.startTime);
+    const ratio = (toTime(value) - range.startTime) / duration;
+    return layout.padding.left + ratio * layout.graphWidth;
+  }
+
+  private timeForX(x: number, layout: Layout, range: TimeRange): number {
+    const ratio = (x - layout.padding.left) / layout.graphWidth;
+    return range.startTime + ratio * (range.endTime - range.startTime);
+  }
+
+  private findNearestPointByX(x: number, points: BandwidthPoint[], layout: Layout, range: TimeRange): BandwidthPoint | null {
+    let nearestPoint: BandwidthPoint | null = null;
+    let nearestDistance = Infinity;
+
+    for (const point of points) {
+      const pointX = this.xForTime(point.time, layout, range);
+      const distance = Math.abs(pointX - x);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestPoint = point;
+      }
+    }
+
+    return nearestPoint;
+  }
+
+  private getPointBandStart(points: BandwidthPoint[], index: number, range: TimeRange): number {
+    const currentTime = toTime(points[index].time);
+    const previousPoint = points[index - 1];
+    const nextPoint = points[index + 1];
+
+    if (previousPoint) return Math.max(range.startTime, midpoint(toTime(previousPoint.time), currentTime));
+    if (nextPoint) return Math.max(range.startTime, currentTime - (toTime(nextPoint.time) - currentTime) / 2);
+    return range.startTime;
+  }
+
+  private getPointBandEnd(points: BandwidthPoint[], index: number, range: TimeRange): number {
+    const currentTime = toTime(points[index].time);
+    const nextPoint = points[index + 1];
+    const previousPoint = points[index - 1];
+
+    if (nextPoint) return Math.min(range.endTime, midpoint(currentTime, toTime(nextPoint.time)));
+    if (previousPoint) return Math.min(range.endTime, currentTime + (currentTime - toTime(previousPoint.time)) / 2);
+    return range.endTime;
   }
 
   private formatBps(value: number | null | undefined): string {
@@ -633,7 +864,6 @@ export class BandwidthGrapherEngine {
   }
 
   private trimLiveBuffer(): void {
-    if (this.range) return;
     if (this.points.length > this.options.maxDataPoints) {
       this.points = this.points.slice(this.points.length - this.options.maxDataPoints);
     }
@@ -647,8 +877,25 @@ function normalizePoint(point: BandwidthPoint): BandwidthPoint {
   };
 }
 
+function normalizeRange(start: BandwidthRange["start"], end: BandwidthRange["end"]): BandwidthRange {
+  const startTime = toTime(start);
+  const endTime = toTime(end);
+
+  return startTime <= endTime
+    ? { start, end }
+    : { start: end, end: start };
+}
+
+function comparePointTime(a: BandwidthPoint, b: BandwidthPoint): number {
+  return toTime(a.time) - toTime(b.time);
+}
+
 function isTimeoutPoint(point: BandwidthPoint): boolean {
   return point.status === "timeout" || point.status === "error" || point.inboundBps === null || point.outboundBps === null;
+}
+
+function midpoint(a: number, b: number): number {
+  return a + (b - a) / 2;
 }
 
 function toTime(value: Date | number | string): number {
