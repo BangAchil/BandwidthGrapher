@@ -114,7 +114,30 @@ export class BandwidthGrapherEngine {
   }
 
   setOptions(options: BandwidthGrapherUserOptions): void {
-    this.options = resolveOptions({ ...this.options, ...options });
+    this.options = resolveOptions({
+      ...this.options,
+      ...options,
+      title: {
+        ...this.options.title,
+        ...options.title,
+      },
+      colors: {
+        ...this.options.colors,
+        ...options.colors,
+      },
+      legend: {
+        ...this.options.legend,
+        ...options.legend,
+      },
+      scale: {
+        ...this.options.scale,
+        ...options.scale,
+      },
+      interaction: {
+        ...this.options.interaction,
+        ...options.interaction,
+      },
+    });
     if (this.options.scale.autoScale) this.updateAutoScale();
     this.render();
   }

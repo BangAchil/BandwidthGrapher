@@ -3,6 +3,7 @@ export { defaultOptions, resolveOptions } from "./core/defaultOptions";
 export { formatBps, formatClock } from "./core/format";
 export { calculateNiceCeiling, calculateGridIntervalSeconds } from "./core/scale";
 export { calculateStats } from "./core/stats";
+export { kingNmsTheme } from "./themes/kingNmsTheme";
 export type {
   BandwidthGrapherColors,
   BandwidthGrapherInteractionOptions,

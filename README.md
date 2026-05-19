@@ -32,6 +32,34 @@ graph.appendPoint({
 });
 ```
 
+## Theme
+
+KING NMS theme tersedia sebagai preset:
+
+```ts
+import { BandwidthGrapherEngine, kingNmsTheme } from "@king-olt/bandwidth-grapher";
+
+const graph = new BandwidthGrapherEngine(container, {
+  ...kingNmsTheme,
+  title: {
+    host: "Router 2",
+    ip: "103.158.27.6",
+    interfaceName: "FTTH Main Link",
+  },
+});
+```
+
+Warna tetap bisa dioverride per instance:
+
+```ts
+graph.setOptions({
+  colors: {
+    inboundFill: "#ff8a1d",
+    outboundLine: "#4aa3ff",
+  },
+});
+```
+
 ## Prinsip desain
 
 BandwidthGrapher tidak tahu endpoint API, SSE, router, OLT, atau database aplikasi. Aplikasi consumer yang mengambil data, lalu library hanya menerima point dan menggambar graph.

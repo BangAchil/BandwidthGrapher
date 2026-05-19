@@ -26,7 +26,7 @@
         flex-wrap: wrap;
         gap: 8px;
         align-items: center;
-        margin-bottom: 16px;
+        margin-bottom: 18px;
       }
 
       button {
@@ -41,7 +41,25 @@
         background: #f3f4f6;
       }
 
-      #graph {
+      .graph-stack {
+        display: grid;
+        gap: 18px;
+      }
+
+      .graph-shell {
+        min-width: 0;
+      }
+
+      .graph-label {
+        margin: 0 0 6px;
+        color: #374151;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .graph-canvas {
         width: 100%;
         height: 346px;
         background: #f8fafc;
@@ -58,7 +76,16 @@
         <button id="threshold">Toggle threshold</button>
         <button id="export">Export image</button>
       </div>
-      <div id="graph"></div>
+      <div class="graph-stack">
+        <section class="graph-shell">
+          <p class="graph-label">Original reference</p>
+          <div id="graph-original" class="graph-canvas"></div>
+        </section>
+        <section class="graph-shell">
+          <p class="graph-label">KING NMS orange/navy</p>
+          <div id="graph-king-nms" class="graph-canvas"></div>
+        </section>
+      </div>
     </main>
     <script type="module" src="/examples/vanilla/main.ts"></script>
   </body>
