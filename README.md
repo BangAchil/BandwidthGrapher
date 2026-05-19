@@ -59,6 +59,7 @@ graph.resetRange(); // back to follow-live
 ```
 
 Mouse wheel zoom and drag-select zoom are enabled by default. Use `Alt + drag`, middle mouse drag, or the pan API/buttons to pan.
+When an explicit range still ends at the latest data point, live data keeps sliding the window forward. Panning or selecting older history freezes the view until `resetRange()`.
 
 ## Theme
 

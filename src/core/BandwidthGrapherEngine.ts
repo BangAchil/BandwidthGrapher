@@ -130,10 +130,23 @@ export class BandwidthGrapherEngine {
   }
 
   appendPoint(point: BandwidthPoint): void {
+    const previousDataRange = this.getDataTimeRange();
+    const previousVisibleRange = this.range ? this.getVisibleTimeRange() : null;
+    const shouldSlideRange = !this.followLive && this.isLiveMode() && this.isRangeAtLiveEdge(previousVisibleRange, previousDataRange);
+
     this.points.push(normalizePoint(point));
     this.points.sort(comparePointTime);
     if (this.dataMode === "live") this.trimLiveBuffer();
-    if (this.followLive) this.range = null;
+
+    if (this.followLive) {
+      this.range = null;
+    } else if (shouldSlideRange) {
+      const nextDataRange = this.getDataTimeRange();
+      if (nextDataRange && previousVisibleRange) {
+        this.range = this.rangeFromTimeRange(this.slideRangeToEnd(previousVisibleRange, nextDataRange.endTime));
+      }
+    }
+
     if (this.options.scale.autoScale) this.updateAutoScale();
     this.render();
   }
@@ -887,6 +900,24 @@ export class BandwidthGrapherEngine {
     let nextDuration = Math.max(minRangeMs, duration);
     if (maxRangeMs) nextDuration = Math.min(maxRangeMs, nextDuration);
     return nextDuration;
+  }
+
+  private isLiveMode(): boolean {
+    return this.dataMode === "live" || this.dataMode === "history-live";
+  }
+
+  private isRangeAtLiveEdge(range: TimeRange | null, dataRange: TimeRange | null = this.getDataTimeRange()): boolean {
+    if (!range || !dataRange) return false;
+    return Math.abs(range.endTime - dataRange.endTime) <= this.getLiveEdgeToleranceMs();
+  }
+
+  private getLiveEdgeToleranceMs(): number {
+    return Math.max(1_000, this.options.intervalSeconds * 1_500);
+  }
+
+  private slideRangeToEnd(range: TimeRange, endTime: number): TimeRange {
+    const duration = range.endTime - range.startTime;
+    return this.clampTimeRange(endTime - duration, endTime);
   }
 
   private clampTimeRange(start: number, end: number): TimeRange {

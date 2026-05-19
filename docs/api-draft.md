@@ -71,7 +71,7 @@ graph.setData(historyPoints, {
 graph.appendPoint(livePoint);
 ```
 
-Calling `setRange`, `fitDataRange`, `zoomIn`, `zoomOut`, or `panPercent` disables live-follow until `resetRange()` is called.
+Calling `setRange`, `fitDataRange`, `zoomIn`, `zoomOut`, or `panPercent` creates an explicit range. If that range still touches the latest data point, live append keeps sliding the visible window forward. If the range is moved into older history, the view stays frozen until `resetRange()` or a new latest-edge range is selected.
 
 ## React wrapper
 
