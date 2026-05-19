@@ -306,7 +306,6 @@ export class BandwidthGrapherEngine {
 
     this.drawTitles(padding);
     this.drawGridAndLabels(layout, visibleRange);
-    this.drawThresholds(layout);
 
     if (this.options.graphStyle === "linear") {
       this.drawAreaLinear(visiblePoints, "inboundBps", this.options.colors.inboundFill, layout, visibleRange);
@@ -317,6 +316,7 @@ export class BandwidthGrapherEngine {
     }
 
     this.drawTimeoutRanges(visiblePoints, layout, visibleRange);
+    this.drawThresholds(layout);
     this.drawBorder(layout);
     this.drawSummary(layout, visiblePoints);
     this.drawWatermark(width, height);
