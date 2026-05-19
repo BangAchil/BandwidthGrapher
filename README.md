@@ -1,4 +1,4 @@
-﻿# BandwidthGrapher
+# BandwidthGrapher
 
 BandwidthGrapher adalah library chart bandwidth custom untuk KING OLT.
 
@@ -9,7 +9,28 @@ Tujuan utama library ini adalah menyediakan graph bandwidth yang punya karakter 
 - Canvas bandwidth graph tanpa window manager.
 - Support live append, history data, dan history + live.
 - API runtime untuk update options, theme, title, legend, threshold, dan range.
-- Tooltip, zoom/range, export, autoscale, dan summary statistik akan dimatangkan bertahap.
+- Tooltip, threshold, export image, autoscale, dan summary statistik sudah mulai tersedia di core engine.
+- Zoom/pan/range selector akan dimatangkan setelah renderer V0 stabil.
+
+## Quick start
+
+```ts
+import { BandwidthGrapherEngine } from "@king-olt/bandwidth-grapher";
+
+const graph = new BandwidthGrapherEngine(container, {
+  title: {
+    host: "Router 2",
+    ip: "103.158.27.6",
+    interfaceName: "FTTH Main Link",
+  },
+});
+
+graph.appendPoint({
+  time: new Date(),
+  inboundBps: 236_200_000,
+  outboundBps: 24_800_000,
+});
+```
 
 ## Prinsip desain
 
@@ -23,6 +44,13 @@ graph.setRange(start, end);
 graph.setOptions(options);
 graph.exportImage();
 ```
+
+## Dokumen
+
+- `docs/product-flow.md`
+- `docs/api-draft.md`
+- `docs/legacy-conversion.md`
+- `docs/testing.md`
 
 ## Status
 
