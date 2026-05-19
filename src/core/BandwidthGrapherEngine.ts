@@ -315,11 +315,13 @@ export class BandwidthGrapherEngine {
     const dpr = window.devicePixelRatio || 1;
     const cssWidth = Math.max(1, Math.floor(rect.width || this.container.clientWidth || 800));
     const cssHeight = Math.max(1, Math.floor(rect.height || this.container.clientHeight || 320));
+    const backingWidth = Math.floor(cssWidth * dpr);
+    const backingHeight = Math.floor(cssHeight * dpr);
 
-    this.canvas.width = Math.floor(cssWidth * dpr);
-    this.canvas.height = Math.floor(cssHeight * dpr);
-    this.canvas.style.width = `${cssWidth}px`;
-    this.canvas.style.height = `${cssHeight}px`;
+    if (this.canvas.width !== backingWidth) this.canvas.width = backingWidth;
+    if (this.canvas.height !== backingHeight) this.canvas.height = backingHeight;
+    if (this.canvas.style.width !== `${cssWidth}px`) this.canvas.style.width = `${cssWidth}px`;
+    if (this.canvas.style.height !== `${cssHeight}px`) this.canvas.style.height = `${cssHeight}px`;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const padding = { ...defaultPadding };
